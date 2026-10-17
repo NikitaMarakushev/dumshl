@@ -24,4 +24,23 @@ _deps/
 *.swo
 *.tmp
 
-.vs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.tags
+.gdb_history
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+*.log
+*.dump
+core
+core.*
+gmon.out
+
+gprof.out
+*.gcda
+*.gcno
