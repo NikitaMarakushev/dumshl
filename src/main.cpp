@@ -14,6 +14,11 @@ struct Command {
     std::string input_file;
     std::string output_file;
 };
+
+struct Pipeline {
+    std::vector<Command> commands;
+};
+
 bool builtin_cd(const std::vector<std::string>& args) {
     if (args.size() < 2) {
         std::cerr << "myshell: cd: argument required\n";
@@ -38,9 +43,9 @@ bool run_builtin(const Command& cmd) {
     return false;
 }
 
-Command parse(const std::string& line) {
+Command parse_command(const std::string& cmd_str) {
     Command cmd;
-    std::istringstream iss(line);
+    std::istringstream iss(cmd_str);
     std::string token;
     
     while (iss >> token) {
@@ -60,62 +65,172 @@ Command parse(const std::string& line) {
     return cmd;
 }
 
-void execute(const Command& cmd) {
-    std::vector<char*> c_args;
-    c_args.reserve(cmd.args.size() + 1);
-    for (const auto& s : cmd.args) {
-        c_args.push_back(const_cast<char*>(s.c_str()));
+Pipeline parse(const std::string& line) {
+    Pipeline pipeline;
+    
+    std::string current_cmd;
+    for (size_t i = 0; i < line.size(); ++i) {
+        if (line[i] == '|') {
+            if (!current_cmd.empty()) {
+                pipeline.commands.push_back(parse_command(current_cmd));
+                current_cmd.clear();
+            }
+        } else {
+            current_cmd += line[i];
+        }
     }
-    c_args.push_back(nullptr);
+    
+    if (!current_cmd.empty()) {
+        pipeline.commands.push_back(parse_command(current_cmd));
+    }
+    
+    return pipeline;
+}
 
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        std::cerr << "myshell: fork failed: " << strerror(errno) << "\n";
+void execute_pipeline(const Pipeline& pipeline) {
+    size_t num_cmds = pipeline.commands.size();
+    
+    if (num_cmds == 1) {
+        const Command& cmd = pipeline.commands[0];
+        
+        if (run_builtin(cmd)) return;
+        
+        std::vector<char*> c_args;
+        for (const auto& s : cmd.args) {
+            c_args.push_back(const_cast<char*>(s.c_str()));
+        }
+        c_args.push_back(nullptr);
+        
+        pid_t pid = fork();
+        if (pid < 0) {
+            std::cerr << "myshell: fork failed: " << strerror(errno) << "\n";
+            return;
+        }
+        
+        if (pid == 0) {
+            if (!cmd.input_file.empty()) {
+                int fd_in = open(cmd.input_file.c_str(), O_RDONLY);
+                if (fd_in < 0) {
+                    std::cerr << "myshell: " << cmd.input_file << ": " 
+                              << strerror(errno) << "\n";
+                    exit(1);
+                }
+                dup2(fd_in, STDIN_FILENO);
+                close(fd_in);
+            }
+            
+            if (!cmd.output_file.empty()) {
+                int fd_out = open(cmd.output_file.c_str(), 
+                                 O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd_out < 0) {
+                    std::cerr << "myshell: " << cmd.output_file << ": " 
+                              << strerror(errno) << "\n";
+                    exit(1);
+                }
+                dup2(fd_out, STDOUT_FILENO);
+                close(fd_out);
+            }
+            
+            execvp(c_args[0], c_args.data());
+            std::cerr << "myshell: " << cmd.args[0] << ": " 
+                      << strerror(errno) << "\n";
+            exit(1);
+        }
+        
+        int status;
+        waitpid(pid, &status, 0);
         return;
     }
-
-    if (pid == 0) {
-        if (!cmd.input_file.empty()) {
-            int fd_in = open(cmd.input_file.c_str(), O_RDONLY);
-            if (fd_in < 0) {
-                std::cerr << "myshell: " << cmd.input_file << ": " 
-                          << strerror(errno) << "\n";
-                exit(1);
-            }
-
-            if (dup2(fd_in, STDIN_FILENO) < 0) {
-                std::cerr << "myshell: dup2 failed: " << strerror(errno) << "\n";
-                exit(1);
-            }
-            close(fd_in);
+    
+    std::vector<std::vector<int>> pipes(num_cmds - 1, std::vector<int>(2));
+    
+    for (size_t i = 0; i < num_cmds - 1; ++i) {
+        if (pipe(pipes[i].data()) < 0) {
+            std::cerr << "myshell: pipe failed: " << strerror(errno) << "\n";
+            return;
         }
-
-        if (!cmd.output_file.empty()) {
-            int fd_out = open(cmd.output_file.c_str(), 
-                             O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (fd_out < 0) {
-                std::cerr << "myshell: " << cmd.output_file << ": " 
-                          << strerror(errno) << "\n";
-                exit(1);
-            }
-            if (dup2(fd_out, STDOUT_FILENO) < 0) {
-                std::cerr << "myshell: dup2 failed: " << strerror(errno) << "\n";
-                exit(1);
-            }
-            close(fd_out);
-        }
-
-        execvp(c_args[0], c_args.data());
-        
-        std::cerr << "myshell: " << cmd.args[0] << ": " 
-                  << strerror(errno) << "\n";
-        exit(1);
     }
+    
+    std::vector<pid_t> pids(num_cmds);
+    
+    for (size_t i = 0; i < num_cmds; ++i) {
+        const Command& cmd = pipeline.commands[i];
+        
+        std::vector<char*> c_args;
+        for (const auto& s : cmd.args) {
+            c_args.push_back(const_cast<char*>(s.c_str()));
+        }
+        c_args.push_back(nullptr);
+        
+        pid_t pid = fork();
+        
+        if (pid < 0) {
+            std::cerr << "myshell: fork failed: " << strerror(errno) << "\n";
+            return;
+        }
+        
+        if (pid == 0) {
+            if (i == 0) {
+                dup2(pipes[0][1], STDOUT_FILENO);
+            }
 
-    int status = 0;
-    waitpid(pid, &status, 0);
+            else if (i == num_cmds - 1) {
+                dup2(pipes[i - 1][0], STDIN_FILENO);
+            }
+
+            else {
+                dup2(pipes[i - 1][0], STDIN_FILENO);
+                dup2(pipes[i][1], STDOUT_FILENO);
+            }
+            
+            for (const auto& p : pipes) {
+                close(p[0]);
+                close(p[1]);
+            }
+            
+            if (!cmd.input_file.empty()) {
+                int fd_in = open(cmd.input_file.c_str(), O_RDONLY);
+                if (fd_in < 0) {
+                    std::cerr << "myshell: " << cmd.input_file << ": " 
+                              << strerror(errno) << "\n";
+                    exit(1);
+                }
+                dup2(fd_in, STDIN_FILENO);
+                close(fd_in);
+            }
+            
+            if (!cmd.output_file.empty()) {
+                int fd_out = open(cmd.output_file.c_str(), 
+                                 O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd_out < 0) {
+                    std::cerr << "myshell: " << cmd.output_file << ": " 
+                              << strerror(errno) << "\n";
+                    exit(1);
+                }
+                dup2(fd_out, STDOUT_FILENO);
+                close(fd_out);
+            }
+            
+            execvp(c_args[0], c_args.data());
+            std::cerr << "myshell: " << cmd.args[0] << ": " 
+                      << strerror(errno) << "\n";
+            exit(1);
+        }
+        
+        pids[i] = pid;
+    }
+    
+    for (const auto& p : pipes) {
+        close(p[0]);
+        close(p[1]);
+    }
+    
+    for (size_t i = 0; i < num_cmds; ++i) {
+        int status;
+        waitpid(pids[i], &status, 0);
+    }
 }
+
 
 int main() {
     std::string line;
@@ -130,12 +245,17 @@ int main() {
 
         if (line.empty()) continue;
 
-        Command cmd = parse(line);
-        if (cmd.args.empty()) continue;
+        Pipeline pipeline = parse(line);
+        if (pipeline.commands.empty()) continue;
 
-        if (run_builtin(cmd)) continue;
+        if (pipeline.commands.size() > 1 && 
+            (pipeline.commands[0].args[0] == "exit" || 
+             pipeline.commands[0].args[0] == "cd")) {
+            std::cerr << "myshell: builtins cannot be used in pipelines\n";
+            continue;
+        }
 
-        execute(cmd);
+        execute_pipeline(pipeline);
     }
 
     return 0;
