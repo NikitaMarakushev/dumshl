@@ -104,30 +104,6 @@ dumshl> exit
 Goodbye!
 ```
 
-## How it works
-
-```text
-read line
-   │
-   ▼
-parse: tokens, redirections, pipes, background flag
-   │
-   ├── builtin ──────────────► execute in the shell process
-   │
-   └── external ──► fork()
-                      │
-                      ├── dup2() / pipe()   set up stdin & stdout
-                      ├── close()           drop unused descriptors
-                      ├── execvp()          replace the child image
-                      │
-   parent ◄───────────┘
-      │
-      ├── waitpid()          foreground: block until done
-      └── job table          background: return to the prompt
-
-SIGCHLD ──► waitpid(..., WNOHANG) ──► reap children, update job state
-```
-
 ### Key implementation details
 
 - **`fork()` + `execvp()`** — every external command runs in a separate process;
@@ -192,7 +168,3 @@ Building this shell covers:
 - Signal handling and reentrancy
 - POSIX job control and terminal behavior
 - C++ resource management and RAII around OS handles
-
-## License
-
-MIT — add a `LICENSE` file before publishing the repository.
