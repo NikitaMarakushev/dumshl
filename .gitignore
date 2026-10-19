@@ -1,7 +1,7 @@
 build/
 cmake-build-*/
 
-myshell
+dumshl
 *.exe
 *.out
 *.app
