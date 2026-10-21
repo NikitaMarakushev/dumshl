@@ -85,7 +85,6 @@ bool builtin_kill(const std::vector<std::string>& args) {
             std::cerr << "dumshl: kill: " << target << ": invalid job id\n";
             return false;
         }
-
         auto it = background_jobs.find(job_id);
         if (it == background_jobs.end() || (!it->second.running && !it->second.stopped)) {
             std::cerr << "dumshl: kill: " << target << ": no such job\n";
@@ -107,11 +106,108 @@ bool builtin_kill(const std::vector<std::string>& args) {
     return true;
 }
 
+bool builtin_export(const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        for (const auto& [name, value] : shell_variables) {
+            std::cout << name << "=" << value << "\n";
+        }
+        return true;
+    }
+    
+    for (size_t i = 1; i < args.size(); ++i) {
+        const std::string& arg = args[i];
+        size_t eq_pos = arg.find('=');
+        
+        if (eq_pos == std::string::npos) {
+            std::cerr << "dumshl: export: " << arg << ": not a valid identifier\n";
+            continue;
+        }
+        
+        std::string name = arg.substr(0, eq_pos);
+        std::string value = arg.substr(eq_pos + 1);
+        
+        shell_variables[name] = value;
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+    
+    return true;
+}
+
+bool builtin_unset(const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        std::cerr << "dumshl: unset: argument required\n";
+        return false;
+    }
+    
+    for (size_t i = 1; i < args.size(); ++i) {
+        shell_variables.erase(args[i]);
+        unsetenv(args[i].c_str());
+    }
+    
+    return true;
+}
+
+bool builtin_alias(const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        for (const auto& [name, value] : shell_aliases) {
+            std::cout << name << "='" << value << "'\n";
+        }
+        return true;
+    }
+    
+    for (size_t i = 1; i < args.size(); ++i) {
+        const std::string& arg = args[i];
+        size_t eq_pos = arg.find('=');
+        
+        if (eq_pos == std::string::npos) {
+            auto it = shell_aliases.find(arg);
+            if (it == shell_aliases.end()) {
+                std::cerr << "dumshl: alias: " << arg << ": not found\n";
+            } else {
+                std::cout << arg << "='" << it->second << "'\n";
+            }
+            continue;
+        }
+        
+        std::string name = arg.substr(0, eq_pos);
+        std::string value = arg.substr(eq_pos + 1);
+        
+        if (value.size() >= 2 && 
+            ((value.front() == '\'' && value.back() == '\'') ||
+             (value.front() == '"' && value.back() == '"'))) {
+            value = value.substr(1, value.size() - 2);
+        }
+        
+        shell_aliases[name] = value;
+    }
+    
+    return true;
+}
+
+bool builtin_unalias(const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        std::cerr << "dumshl: unalias: argument required\n";
+        return false;
+    }
+    
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (shell_aliases.erase(args[i]) == 0) {
+            std::cerr << "dumshl: unalias: " << args[i] << ": not found\n";
+        }
+    }
+    
+    return true;
+}
+
 bool run_builtin(const Command& cmd) {
     if (cmd.args.empty()) return false;
-    if (cmd.args[0] == "exit") return builtin_exit(cmd.args), true;
-    if (cmd.args[0] == "cd")   return builtin_cd(cmd.args),   true;
-    if (cmd.args[0] == "jobs") return builtin_jobs(cmd.args), true;
-    if (cmd.args[0] == "kill") return builtin_kill(cmd.args), true;
+    if (cmd.args[0] == "exit")    return builtin_exit(cmd.args),    true;
+    if (cmd.args[0] == "cd")      return builtin_cd(cmd.args),      true;
+    if (cmd.args[0] == "jobs")    return builtin_jobs(cmd.args),    true;
+    if (cmd.args[0] == "kill")    return builtin_kill(cmd.args),    true;
+    if (cmd.args[0] == "export")  return builtin_export(cmd.args),  true;
+    if (cmd.args[0] == "unset")   return builtin_unset(cmd.args),   true;
+    if (cmd.args[0] == "alias")   return builtin_alias(cmd.args),   true;
+    if (cmd.args[0] == "unalias") return builtin_unalias(cmd.args), true;
     return false;
 }

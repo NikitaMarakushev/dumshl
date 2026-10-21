@@ -15,6 +15,9 @@ int next_job_id = 1;
 bool shell_should_exit = false;
 int shell_exit_code = 0;
 
+std::map<std::string, std::string> shell_variables;
+std::map<std::string, std::string> shell_aliases;
+
 static volatile sig_atomic_t got_sigchld = 0;
 
 void reset_signals_for_child() {
@@ -195,4 +198,10 @@ void execute_pipeline(const Pipeline& pipeline) {
         waitpid(pids[i], &status, 0);
     }
     tcsetpgrp(STDIN_FILENO, getpid());
+}
+
+void sync_to_environ() {
+    for (const auto& [name, value] : shell_variables) {
+        setenv(name.c_str(), value.c_str(), 1);
+    }
 }
