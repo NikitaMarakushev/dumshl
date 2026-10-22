@@ -14,11 +14,42 @@ std::map<int, BackgroundJob> background_jobs;
 int next_job_id = 1;
 bool shell_should_exit = false;
 int shell_exit_code = 0;
+int last_exit_status = 0;
 
 std::map<std::string, std::string> shell_variables;
 std::map<std::string, std::string> shell_aliases;
 
 static volatile sig_atomic_t got_sigchld = 0;
+
+static void redirect_input(const std::string& filename, int target_fd) {
+    int fd = open(filename.c_str(), O_RDONLY);
+    if (fd < 0) {
+        std::cerr << "dumshl: " << filename << ": " << strerror(errno) << "\n";
+        exit(1);
+    }
+    if (dup2(fd, target_fd) < 0) {
+        std::cerr << "dumshl: dup2 failed: " << strerror(errno) << "\n";
+        exit(1);
+    }
+    close(fd);
+}
+
+static void redirect_output(const std::string& filename, int target_fd, bool append) {
+    int flags = O_WRONLY | O_CREAT;
+    flags |= append ? O_APPEND : O_TRUNC;
+    
+    int fd = open(filename.c_str(), flags, 0644);
+    if (fd < 0) {
+        std::cerr << "dumshl: " << filename << ": " << strerror(errno) << "\n";
+        exit(1);
+    }
+    if (dup2(fd, target_fd) < 0) {
+        std::cerr << "dumshl: dup2 failed: " << strerror(errno) << "\n";
+        exit(1);
+    }
+    close(fd);
+}
+
 
 void reset_signals_for_child() {
     struct sigaction sa;
@@ -91,16 +122,8 @@ void execute_pipeline(const Pipeline& pipeline) {
                 sigaction(SIGTSTP, &sa_ignore, nullptr);
             }
             
-            if (!cmd.input_file.empty()) {
-                int fd_in = open(cmd.input_file.c_str(), O_RDONLY);
-                if (fd_in < 0) { std::cerr << "dumshl: " << cmd.input_file << ": " << strerror(errno) << "\n"; exit(1); }
-                dup2(fd_in, STDIN_FILENO); close(fd_in);
-            }
-            if (!cmd.output_file.empty()) {
-                int fd_out = open(cmd.output_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (fd_out < 0) { std::cerr << "dumshl: " << cmd.output_file << ": " << strerror(errno) << "\n"; exit(1); }
-                dup2(fd_out, STDOUT_FILENO); close(fd_out);
-            }
+            if (!cmd.input_file.empty())  redirect_input(cmd.input_file, STDIN_FILENO);
+            if (!cmd.output_file.empty()) redirect_output(cmd.output_file, STDOUT_FILENO, cmd.append_mode);
             
             execvp(c_args[0], c_args.data());
             std::cerr << "dumshl: " << cmd.args[0] << ": " << strerror(errno) << "\n";
@@ -124,6 +147,14 @@ void execute_pipeline(const Pipeline& pipeline) {
             int status;
             waitpid(pid, &status, 0);
             tcsetpgrp(STDIN_FILENO, getpid());
+
+            if (WIFEXITED(status)) {
+                last_exit_status = WEXITSTATUS(status);
+            } else if (WIFSIGNALED(status)) {
+                last_exit_status = 128 + WTERMSIG(status);
+            } else {
+                last_exit_status = 1;
+            }
         }
         return;
     }

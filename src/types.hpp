@@ -8,6 +8,7 @@ enum class TokenType {
     WORD,        // basic word
     PIPE,        // |
     REDIR_OUT,   // >
+    REDIR_APPEND,  // <
     REDIR_IN,    // <
     AMPERSAND    // &
 };
@@ -21,6 +22,7 @@ struct Command {
     std::vector<std::string> args;
     std::string input_file;
     std::string output_file;
+    bool append_mode = false;
     bool background = false;
 };
 
@@ -43,5 +45,6 @@ extern bool shell_should_exit;
 extern int shell_exit_code;
 extern std::map<std::string, std::string> shell_variables;
 extern std::map<std::string, std::string> shell_aliases;
+extern int last_exit_status;
 
 void sync_to_environ();
